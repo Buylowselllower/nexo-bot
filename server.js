@@ -1,0 +1,50 @@
+// server.js
+import express from 'express';
+import Database from 'better-sqlite3';
+import crypto from 'crypto';
+
+const app = express();
+app.use(express.json());
+app.use(express.static('public')); 
+const db = new Database('orders.db');
+db.exec(`CREATE TABLE IF NOT EXISTS orders (
+  id TEXT PRIMARY KEY, details TEXT, status TEXT DEFAULT 'pending',
+  address TEXT, created_at INTEGER, claimed_at INTEGER)`);
+
+const WORKER_KEY = process.env.WORKER_KEY; // long random secret
+
+// User submits details
+app.post('/api/orders', (req, res) => {
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO orders (id, details, created_at) VALUES (?,?,?)')
+    .run(id, JSON.stringify(req.body), Date.now());
+  res.json({ id });
+});
+
+// Frontend polls this
+app.get('/api/orders/:id', (req, res) => {
+  const o = db.prepare('SELECT status, address FROM orders WHERE id=?').get(req.params.id);
+  res.json(o || { status: 'not_found' });
+});
+
+// Worker auth
+const auth = (req, res, next) =>
+  req.headers['x-worker-key'] === WORKER_KEY ? next() : res.sendStatus(401);
+
+// Worker claims next job
+app.post('/api/worker/claim', auth, (req, res) => {
+  const o = db.prepare(`SELECT * FROM orders WHERE status='pending' ORDER BY created_at LIMIT 1`).get();
+  if (!o) return res.json(null);
+  db.prepare(`UPDATE orders SET status='processing', claimed_at=? WHERE id=?`).run(Date.now(), o.id);
+  res.json(o);
+});
+
+// Worker submits result
+app.post('/api/worker/complete', auth, (req, res) => {
+  const { id, address, error } = req.body;
+  if (error) db.prepare(`UPDATE orders SET status='failed' WHERE id=?`).run(id);
+  else db.prepare(`UPDATE orders SET status='ready', address=? WHERE id=?`).run(address, id);
+  res.sendStatus(200);
+});
+
+app.listen(3000);
