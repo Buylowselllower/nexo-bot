@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Website A</title>
+<style>
+  :root { --bg:#f6f7f8; --card:#fff; --text:#111; --muted:#667; --accent:#111; --accent-text:#fff; --border:#d8dbe0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e0f12; --card:#181a1f; --text:#f2f3f5; --muted:#9aa0ab; --accent:#f2f3f5; --accent-text:#111; --border:#2b2e35; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text);
+         font-family: system-ui, -apple-system, "Segoe UI", sans-serif; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:28px; width:100%; max-width:420px; }
+  h1 { font-size:1.3rem; margin:0 0 18px; }
+  label { display:block; font-size:.9rem; color:var(--muted); margin-bottom:6px; }
+  input { width:100%; padding:12px; font-size:1rem; border:1px solid var(--border); border-radius:8px;
+          background:transparent; color:var(--text); }
+  button { width:100%; margin-top:16px; padding:12px; font-size:1rem; border:0; border-radius:8px;
+           background:var(--accent); color:var(--accent-text); cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .hidden { display:none; }
+  .addr { word-break:break-all; padding:12px; border:1px dashed var(--border); border-radius:8px;
+          font-family: ui-monospace, Consolas, monospace; margin:12px 0; user-select:all; }
+  .muted { color:var(--muted); font-size:.9rem; }
+  .spinner { width:22px; height:22px; border:3px solid var(--border); border-top-color:var(--text);
+             border-radius:50%; animation:spin 1s linear infinite; margin:0 auto 14px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="card">
+
+  <div id="form-view">
+    <h1>What is your name?</h1>
+    <label for="name">Your name</label>
+    <input id="name" maxlength="60" autocomplete="off" autofocus>
+    <button id="go">Continue</button>
+    <p id="form-error" class="muted hidden"></p>
+  </div>
+
+  <div id="wait-view" class="hidden" style="text-align:center">
+    <div class="spinner"></div>
+    <h1>Please wait…</h1>
+    <p class="muted">We’re preparing your payment details. This usually takes under a minute.</p>
+  </div>
+
+  <div id="done-view" class="hidden">
+    <h1>Your payment address</h1>
+    <div id="address" class="addr"></div>
+    <p class="muted">Send your payment to this address only.</p>
+  </div>
+
+  <div id="error-view" class="hidden">
+    <h1>Something went wrong</h1>
+    <p class="muted" id="error-text">Please try again in a moment.</p>
+    <button id="retry">Try again</button>
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const show = v => ['form-view','wait-view','done-view','error-view']
+  .forEach(x => $(x).classList.toggle('hidden', x !== v));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+$('go').addEventListener('click', submit);
+$('name').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+$('retry').addEventListener('click', () => { show('form-view'); $('go').disabled = false; });
+
+async function submit() {
+  const name = $('name').value.trim();
+  if (!name) { $('form-error').textContent = 'Please enter your name.'; $('form-error').classList.remove('hidden'); return; }
+  $('go').disabled = true;
+  $('form-error').classList.add('hidden');
+
+  try {
+    const res = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) throw new Error('Could not create order');
+    const { id } = await res.json();
+    show('wait-view');
+    await pollOrder(id);
+  } catch (e) {
+    fail(e.message);
+  }
+}
+
+async function pollOrder(id) {
+  const deadline = Date.now() + 3 * 60 * 1000; // give up after 3 minutes
+  while (Date.now() < deadline) {
+    const res = await fetch('/api/orders/' + encodeURIComponent(id));
+    const o = await res.json();
+    if (o.status === 'ready') {
+      $('address').textContent = o.address; // textContent, never innerHTML
+      return show('done-view');
+    }
+    if (o.status === 'failed') return fail('We couldn’t get your address. Please try again.');
+    await sleep(2000);
+  }
+  fail('This is taking longer than expected. Please try again.');
+}
+
+function fail(msg) {
+  $('error-text').textContent = msg;
+  show('error-view');
+}
+</script>
+</body>
+</html>
